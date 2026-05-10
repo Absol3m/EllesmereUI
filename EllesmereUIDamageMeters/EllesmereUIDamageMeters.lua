@@ -88,6 +88,9 @@ local DM_DEFAULTS = {
             showClassColor  = true,
             showPinnedSelf  = false,
             showHoverTooltip = true,
+            breakdownAnchorPoint = "row", -- "row" (Above Row) | "center" (Center of Screen)
+            breakdownBarTextureOverride = false,
+            breakdownBarTexture = nil,
             barColorUseAccent = true,
             barColor        = { r = 0.35, g = 0.55, b = 0.8 },
             barFillAlpha    = 1,
@@ -111,6 +114,7 @@ local DM_DEFAULTS = {
             hdrTextOffX     = 0,
             hdrTextOffY     = 0,
             hdrIconSize     = 22,
+            hdrMouseoverIcons = false,
             hdrTextUseAccent = true,
             hdrTextColor    = { r = 1, g = 1, b = 1 },
             -- Per-window settings
@@ -138,6 +142,58 @@ end
 
 local function DB() return ns.EDM.DB() end
 local function GetHeaderH() local c = DB(); return c.hdrHeight or 22 end
+
+-- Header icon visibility (hide until title bar hovered)
+local function SetHeaderButtonsShown(W, shown)
+    if not W or not W.hdrBtns then return end
+    for _, btn in ipairs(W.hdrBtns) do
+        btn:SetAlpha(shown and 1 or 0)
+        btn:EnableMouse(shown)
+    end
+end
+
+local function EnsureHeaderButtonsHoverHooks(W)
+    if not W or W._hdrHideUntilHoverHooksInstalled then return end
+    W._hdrHideUntilHoverHooksInstalled = true
+
+    local function Show()
+        local cfg = DB()
+        if not cfg.hdrMouseoverIcons then return end
+        SetHeaderButtonsShown(W, true)
+    end
+
+    local function MaybeHide()
+        local cfg = DB()
+        if not cfg.hdrMouseoverIcons then return end
+        if not W.header then return end
+        C_Timer.After(0, function()
+            if not W.header then return end
+            if W.header:IsMouseOver() then return end
+            SetHeaderButtonsShown(W, false)
+        end)
+    end
+
+    if W.header then
+        W.header:HookScript("OnEnter", Show)
+        W.header:HookScript("OnLeave", MaybeHide)
+    end
+    if W.hdrBtns then
+        for _, btn in ipairs(W.hdrBtns) do
+            btn:HookScript("OnEnter", Show)
+            btn:HookScript("OnLeave", MaybeHide)
+        end
+    end
+end
+
+local function ApplyHeaderButtonsHoverVisibility(W, cfg)
+    if not W or not W.header or not W.hdrBtns then return end
+    EnsureHeaderButtonsHoverHooks(W)
+    if cfg and cfg.hdrMouseoverIcons then
+        SetHeaderButtonsShown(W, W.header:IsMouseOver())
+    else
+        SetHeaderButtonsShown(W, true)
+    end
+end
 
 -- Per-window DB accessor
 local function WinDB(idx)
@@ -402,6 +458,15 @@ end
 local function GetBarTexturePath()
     local cfg = DB()
     local key = cfg and cfg.barTexture or "none"
+    return EUI.ResolveTexturePath(DM_BAR_TEXTURES, key, BAR_TEX), key
+end
+
+local function GetBreakdownBarTexturePath()
+    local cfg = DB()
+    local key = cfg and cfg.barTexture or "none"
+    if cfg and cfg.breakdownBarTextureOverride and cfg.breakdownBarTexture then
+        key = cfg.breakdownBarTexture
+    end
     return EUI.ResolveTexturePath(DM_BAR_TEXTURES, key, BAR_TEX), key
 end
 
@@ -888,7 +953,7 @@ local function PopulatePreview(bar, curSession, curSessionID, curDMType)
         local reversed = {}
         for ri = #raw, 1, -1 do reversed[#reversed + 1] = raw[ri] end
         ApplyTTHeader(StripRealm(bar._src.name) or "Unknown", "Death Recap")
-        local texPath, texKey = GetBarTexturePath()
+        local texPath, texKey = GetBreakdownBarTexturePath()
         local deathTime = reversed[#reversed] and reversed[#reversed].timestamp or GetTime()
         local total = #reversed
         local count = math.min(TT_MAX, total)
@@ -952,7 +1017,7 @@ local function PopulatePreview(bar, curSession, curSessionID, curDMType)
         if not players then return false end
 
         ApplyTTHeader(StripRealm(bar._src.name) or "Unknown", "Damage Taken")
-        local texPath, texKey = GetBarTexturePath()
+        local texPath, texKey = GetBreakdownBarTexturePath()
         local maxAmt = players[1].total
         local count = math.min(TT_MAX, #players)
         for i = 1, TT_MAX do
@@ -1016,7 +1081,7 @@ local function PopulatePreview(bar, curSession, curSessionID, curDMType)
     local totalDmg = 0
     local canPercent = type(maxAmt) == "number" and (not issecretvalue or not issecretvalue(maxAmt))
     if canPercent then for _, e in ipairs(_ttSorted) do totalDmg = totalDmg + e.amount end end
-    local texPath, texKey = GetBarTexturePath()
+    local texPath, texKey = GetBreakdownBarTexturePath()
     local count = math.min(TT_MAX, #_ttSorted)
     for i = 1, TT_MAX do
         local b = _ttBars[i]
@@ -1137,13 +1202,20 @@ local function ShowBarTooltip(bar, curSession, curSessionID, curDMType)
     if cfg.showHoverTooltip == false then return end
     EnsureTooltipFrame()
     local barRow = bar.row
+    local anchorMode = cfg.breakdownAnchorPoint
+    local desiredAnchor = (anchorMode == "center") and "CENTER" or barRow
     -- Skip full rebuild if tooltip is already populated for this exact player + session
     local barGUID = bar._srcGUID
     if barGUID == _ttLastGUID and curSession == _ttLastSession and curSessionID == _ttLastSessionID and curDMType == _ttLastDMType then
-        if _ttLastAnchor ~= barRow then
+        if _ttLastAnchor ~= desiredAnchor then
             _ttFrame:ClearAllPoints()
-            _ttFrame:SetPoint("BOTTOMRIGHT", barRow, "TOPRIGHT", 0, 0)
-            _ttLastAnchor = barRow
+            if desiredAnchor == "CENTER" then
+                _ttFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+                _ttLastAnchor = "CENTER"
+            else
+                _ttFrame:SetPoint("BOTTOMRIGHT", barRow, "TOPRIGHT", 0, 0)
+                _ttLastAnchor = barRow
+            end
         end
         _ttFrame:Show()
     
@@ -1157,8 +1229,13 @@ local function ShowBarTooltip(bar, curSession, curSessionID, curDMType)
             _ttLastScale = scale
         end
         _ttFrame:ClearAllPoints()
-        _ttFrame:SetPoint("BOTTOMRIGHT", barRow, "TOPRIGHT", 0, 0)
-        _ttLastAnchor = barRow
+        if anchorMode == "center" then
+            _ttFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+            _ttLastAnchor = "CENTER"
+        else
+            _ttFrame:SetPoint("BOTTOMRIGHT", barRow, "TOPRIGHT", 0, 0)
+            _ttLastAnchor = barRow
+        end
         _ttFrame:Show()
     end
 
@@ -1496,7 +1573,11 @@ local function CreateDMWindow(winIdx)
                     _ttFrame._combatMsg:Show()
                     _ttFrame:SetSize(TT_WIDTH, TT_HDR_H + 40)
                     _ttFrame:ClearAllPoints()
-                    _ttFrame:SetPoint("BOTTOMRIGHT", bar.row, "TOPRIGHT", 0, 0)
+                    if cfg2 and cfg2.breakdownAnchorPoint == "center" then
+                        _ttFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+                    else
+                        _ttFrame:SetPoint("BOTTOMRIGHT", bar.row, "TOPRIGHT", 0, 0)
+                    end
                     _ttFrame:Show()
                     return
                 end
@@ -1520,7 +1601,11 @@ local function CreateDMWindow(winIdx)
                 _ttFrame._combatMsg:Show()
                 _ttFrame:SetSize(TT_WIDTH, TT_HDR_H + 40)
                 _ttFrame:ClearAllPoints()
-                _ttFrame:SetPoint("BOTTOMRIGHT", bar.row, "TOPRIGHT", 0, 0)
+                if cfg2 and cfg2.breakdownAnchorPoint == "center" then
+                    _ttFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+                else
+                    _ttFrame:SetPoint("BOTTOMRIGHT", bar.row, "TOPRIGHT", 0, 0)
+                end
                 _ttFrame:Show()
                 return
             end
@@ -1856,6 +1941,9 @@ local function CreateDMWindow(winIdx)
 
     -- Ordered list of header buttons for live resize/reposition
     W.hdrBtns = { W.settingsBtn, W.segmentBtn, W.modeBtn, W.resetBtn, W.winActionBtn }
+
+    -- Option: hide header icons until the title bar is hovered
+    ApplyHeaderButtonsHoverVisibility(W, cfg)
 
     ---------------------------------------------------------------------------
     --  Snap helpers (X-axis alignment + width matching against other DM windows)
@@ -3494,6 +3582,8 @@ ns.ApplyHeader = function()
             w._closeIconTex:SetSize(iconSz + 2, iconSz + 2)
             w._closeIconTex:SetPoint("CENTER", w.winActionBtn, "CENTER", 0, 0)
         end
+
+        ApplyHeaderButtonsHoverVisibility(w, cfg)
     end
 end
 

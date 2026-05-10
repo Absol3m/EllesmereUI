@@ -131,7 +131,7 @@ initFrame:SetScript("OnEvent", function(self)
         end
         y = y - h
 
-        -- Refresh Rate (+ seconds) | Show Breakdown on Hover (+ inline cog)
+        -- Refresh Rate (+ seconds) | Reset Data Keybind
         local rrRow
         rrRow, h = W:DualRow(parent, y,
             { type="slider", text="Refresh Rate",
@@ -140,9 +140,7 @@ initFrame:SetScript("OnEvent", function(self)
               getValue = function() return Cfg("refreshRate") or 0.5 end,
               setValue = function(v) Set("refreshRate", v) end,
               fmt = function(v) return format("%.2fs", v) end },
-            { type="toggle", text="Show Breakdown on Hover",
-              getValue = function() return Cfg("showHoverTooltip") ~= false end,
-              setValue = function(v) Set("showHoverTooltip", v) end })
+            { type="label", text="Reset Data Keybind" })
         do
             local rgn = rrRow._leftRegion
             local suffix = rgn:CreateFontString(nil, "OVERLAY")
@@ -163,38 +161,9 @@ initFrame:SetScript("OnEvent", function(self)
             end
             suffix:SetText("(seconds)")
         end
+
         do
             local rgn = rrRow._rightRegion
-            local _, cogShow = EllesmereUI.BuildCogPopup({
-                title = "Hover Tooltip Scale",
-                rows = {
-                    { type = "slider", label = "Scale", min = 80, max = 150, step = 1,
-                      get = function() return (Cfg("hoverTooltipScale") or 100) end,
-                      set = function(v) Set("hoverTooltipScale", v) end },
-                },
-            })
-            local cogBtn = CreateFrame("Button", nil, rgn)
-            cogBtn:SetSize(26, 26)
-            cogBtn:SetPoint("RIGHT", rgn._lastInline or rgn._control, "LEFT", -8, 0)
-            rgn._lastInline = cogBtn
-            cogBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
-            cogBtn:SetAlpha(0.4)
-            local cogTex = cogBtn:CreateTexture(nil, "OVERLAY")
-            cogTex:SetAllPoints()
-            cogTex:SetTexture(EllesmereUI.RESIZE_ICON)
-            cogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
-            cogBtn:SetScript("OnLeave", function(self) self:SetAlpha(0.4) end)
-            cogBtn:SetScript("OnClick", function(self) cogShow(self) end)
-        end
-        y = y - h
-
-        -- Row 4: Reset Data Keybind | (empty)
-        local kbRow
-        kbRow, h = W:DualRow(parent, y,
-            { type="label", text="Reset Data Keybind" },
-            { type="label", text="" })
-        do
-            local rgn = kbRow._leftRegion
             local KB_W, KB_H = 120, 26
             local kbBtn = CreateFrame("Button", nil, rgn)
             PP.Size(kbBtn, KB_W, KB_H)
@@ -498,6 +467,28 @@ initFrame:SetScript("OnEvent", function(self)
             end)
             accentSwatch:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
 
+            -- Inline cog: icon visibility
+            local _, cogShow = EllesmereUI.BuildCogPopup({
+                title = "Icon Visibility",
+                rows = {
+                    { type = "toggle", label = "Mouseover Icons",
+                      get = function() return Cfg("hdrMouseoverIcons") or false end,
+                      set = function(v) Set("hdrMouseoverIcons", v); ApplyHdr() end },
+                },
+            })
+            local cogBtn = CreateFrame("Button", nil, rgn)
+            cogBtn:SetSize(26, 26)
+            cogBtn:SetPoint("RIGHT", accentSwatch, "LEFT", -8, 0)
+            rgn._lastInline = cogBtn
+            cogBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
+            cogBtn:SetAlpha(0.4)
+            local cogTex = cogBtn:CreateTexture(nil, "OVERLAY")
+            cogTex:SetAllPoints()
+            cogTex:SetTexture(EllesmereUI.COGS_ICON)
+            cogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
+            cogBtn:SetScript("OnLeave", function(self) self:SetAlpha(0.4) end)
+            cogBtn:SetScript("OnClick", function(self) cogShow(self) end)
+
             local function refreshHdrIcon()
                 updateCustom(); updateAccent()
                 local useAccent = Cfg("iconColorUseAccent")
@@ -773,6 +764,64 @@ initFrame:SetScript("OnEvent", function(self)
             EllesmereUI.RegisterWidgetRefresh(refreshRight)
             refreshRight()
         end
+        y = y - h
+
+        -- ── BREAKDOWN ───────────────────────────────────────────────────
+        _, h = W:SectionHeader(parent, "BREAKDOWN", y); y = y - h
+
+        -- Show Breakdown on Hover (+ inline cog) | Breakdown Anchor Point
+        local bdRow
+        bdRow, h = W:DualRow(parent, y,
+            { type="toggle", text="Show Breakdown on Hover",
+              getValue = function() return Cfg("showHoverTooltip") ~= false end,
+              setValue = function(v) Set("showHoverTooltip", v) end },
+            {
+                type = "dropdown",
+                text = "Breakdown Anchor Point",
+                values = { ["row"] = "Above Row", ["center"] = "Center of Screen" },
+                order = { "row", "center" },
+                getValue = function() return Cfg("breakdownAnchorPoint") or "row" end,
+                setValue = function(v) Set("breakdownAnchorPoint", v) end
+            })
+        do
+            local rgn = bdRow._leftRegion
+            local _, cogShow = EllesmereUI.BuildCogPopup({
+                title = "Hover Tooltip Scale",
+                rows = {
+                    { type = "slider", label = "Scale", min = 80, max = 150, step = 1,
+                      get = function() return (Cfg("hoverTooltipScale") or 100) end,
+                      set = function(v) Set("hoverTooltipScale", v) end },
+                },
+            })
+            local cogBtn = CreateFrame("Button", nil, rgn)
+            cogBtn:SetSize(26, 26)
+            cogBtn:SetPoint("RIGHT", rgn._control, "LEFT", -8, 0)
+            rgn._lastInline = cogBtn
+            cogBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
+            cogBtn:SetAlpha(0.4)
+            local cogTex = cogBtn:CreateTexture(nil, "OVERLAY")
+            cogTex:SetAllPoints()
+            cogTex:SetTexture(EllesmereUI.RESIZE_ICON)
+            cogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
+            cogBtn:SetScript("OnLeave", function(self) self:SetAlpha(0.4) end)
+            cogBtn:SetScript("OnClick", function(self) cogShow(self) end)
+        end
+        y = y - h
+
+        -- Override Bar Texture | Bar Texture
+        _, h = W:DualRow(parent, y,
+            { type="toggle", text="Override Bar Texture",
+              getValue = function() return Cfg("breakdownBarTextureOverride") or false end,
+              setValue = function(v) Set("breakdownBarTextureOverride", v); Refresh(); EllesmereUI:RefreshPage() end },
+            { type="dropdown", text="Bar Texture",
+              values   = dmTexValues,
+              order    = dmTexOrder,
+              disabled = function() return not Cfg("breakdownBarTextureOverride") end,
+              disabledTooltip = "Override Bar Texture to be enabled",
+              getValue = function()
+                  return Cfg("breakdownBarTexture") or Cfg("barTexture") or "atrocity"
+              end,
+              setValue = function(v) Set("breakdownBarTexture", v); Refresh() end })
         y = y - h
 
         -- ── STANDALONE COMBAT TIMER ──────────────────────────────────
@@ -1099,7 +1148,25 @@ initFrame:SetScript("OnEvent", function(self)
               setValue = function(v) SHDB().maxBars = v; RefreshSH() end }
         );  y = y - h
 
-        -- Row 4: Bar Color | Opacity
+                -- Row 4: Override Bar Texture | Bar Texture
+                _, h = W:DualRow(parent, y,
+                        { type = "toggle", text = "Override Bar Texture",
+                            disabled = barOff, disabledTooltip = "Enable Bar History",
+                            getValue = function() return SHDB().spellHistoryBarTextureOverride or false end,
+                            setValue = function(v)
+                                    SHDB().spellHistoryBarTextureOverride = v
+                                    RefreshSH(); EllesmereUI:RefreshPage()
+                            end },
+                        { type = "dropdown", text = "Bar Texture",
+                            values = dmTexValues,
+                            order  = dmTexOrder,
+                            disabled = function() return barOff() or not SHDB().spellHistoryBarTextureOverride end,
+                            disabledTooltip = "Override Bar Texture to be enabled",
+                            getValue = function() return SHDB().spellHistoryBarTexture or Cfg("barTexture") or "atrocity" end,
+                            setValue = function(v) SHDB().spellHistoryBarTexture = v; RefreshSH() end }
+                );  y = y - h
+
+                -- Row 5: Bar Color | Opacity
         _, h = W:DualRow(parent, y,
             { type = "multiSwatch", text = "Bar Color",
               disabled = barOff, disabledTooltip = "Enable Bar History",
@@ -1165,7 +1232,7 @@ initFrame:SetScript("OnEvent", function(self)
               setValue = function(v) SHDB().barOpacity = v; RefreshSH() end }
         );  y = y - h
 
-        -- Row 5: Text Size (+ inline dual swatches: custom + accent) | (empty)
+                -- Row 6: Text Size (+ inline dual swatches: custom + accent) | (empty)
         local textRow
         textRow, h = W:DualRow(parent, y,
             { type = "slider", text = "Text Size",

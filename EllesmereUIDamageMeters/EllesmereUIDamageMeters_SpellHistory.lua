@@ -46,6 +46,8 @@ local SH_DEFAULTS = {
     barColorUseAccent = false,
     barColor        = { r = 0.298, g = 0.565, b = 0.494 },  -- #4C907E
     barOpacity      = 1,
+    spellHistoryBarTextureOverride = false,
+    spellHistoryBarTexture = nil,
     textSize        = 11,
     textColorUseAccent = false,
     textColor       = { r = 1, g = 1, b = 1 },
@@ -114,8 +116,14 @@ local function PhysicalPixels(val)
 end
 
 local function GetBarTexturePath()
-    local cfg = ns.EDM.DB()
-    local key = cfg and cfg.barTexture or "none"
+    local dmCfg = ns.EDM.DB()
+    local sh = DB()
+    local key
+    if sh.spellHistoryBarTextureOverride and sh.spellHistoryBarTexture then
+        key = sh.spellHistoryBarTexture
+    else
+        key = (dmCfg and dmCfg.barTexture) or "none"
+    end
     local texTable = _G._EDM_BarTextures
     if texTable then return EUI.ResolveTexturePath(texTable, key, BAR_TEX) end
     return BAR_TEX
