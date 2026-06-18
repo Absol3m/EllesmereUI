@@ -1249,6 +1249,25 @@ initFrame:SetScript("OnEvent", function(self)
                 else
                     newEntry.thresholdPct = 30
                 end
+                -- Smart default for the power bar's "Threshold color below value":
+                -- spender resources (mana/energy/focus) start ON (warn when low),
+                -- builders (rage/runic/fury) start OFF (warn when high). Only when the
+                -- entry covers the current spec -- the one whose power type we can read.
+                if cfg.showPartialCog then
+                    local curIdx = GetSpecialization()
+                    local curSpecID = curIdx and C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo(curIdx)
+                    if curSpecID then
+                        for _, sid in ipairs(ids) do
+                            if sid == curSpecID then
+                                local _, token = UnitPowerType("player")
+                                if token == "MANA" or token == "FOCUS" or token == "ENERGY" then
+                                    newEntry.thresholdPartialOnly = true
+                                end
+                                break
+                            end
+                        end
+                    end
+                end
                 bd.thresholdSpecs[#bd.thresholdSpecs + 1] = newEntry
                 wipe(_tempSpecSel)
                 WrappedRefresh()
@@ -1515,7 +1534,7 @@ initFrame:SetScript("OnEvent", function(self)
                             title = "Threshold Coloring", bgAlpha = 1,
                             frameStrata = "FULLSCREEN_DIALOG", frameLevel = 500,
                             rows = {
-                                { type = "toggle", label = "Reverse Threshold Fill Color",
+                                { type = "toggle", label = "Threshold color below value",
                                   get = function()
                                       if not ef._entryIdx then return false end
                                       local bd2 = cfg.getBarData(); if not bd2 then return false end
@@ -2923,6 +2942,26 @@ initFrame:SetScript("OnEvent", function(self)
                         thresholdB = p2.thresholdB or 0x9d/255,
                         thresholdA = p2.thresholdA or 1,
                     }
+                    -- Smart default for "Threshold color below value": the only
+                    -- bar-type spender class resource is Hunter Focus -> start ON
+                    -- (warn when low); builders (Maelstrom/Insanity/Astral) start OFF.
+                    -- Only when the entry covers the current spec (resource readable).
+                    if isBar then
+                        local curIdx = GetSpecialization()
+                        local curSpecID = curIdx and C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo(curIdx)
+                        if curSpecID then
+                            for _, sid in ipairs(ids) do
+                                if sid == curSpecID then
+                                    local gsr = _G._ERB_GetSecondaryResource
+                                    local info = gsr and gsr()
+                                    if info and info.power == "FOCUS_BAR" then
+                                        newEntry.thresholdReverse = true
+                                    end
+                                    break
+                                end
+                            end
+                        end
+                    end
                     p.secondary.thresholdSpecs[#p.secondary.thresholdSpecs + 1] = newEntry
                     wipe(_tempSpecSel)
                     if WrappedRefresh then WrappedRefresh() end
@@ -3239,7 +3278,7 @@ initFrame:SetScript("OnEvent", function(self)
                         local _, entryRevCogShow = EllesmereUI.BuildCogPopup({
                             title = "Threshold Coloring", bgAlpha = 1, frameStrata = "FULLSCREEN_DIALOG", frameLevel = 500,
                             rows = {
-                                { type = "toggle", label = "Reverse Threshold Fill Color",
+                                { type = "toggle", label = "Threshold color below value",
                                   get = function()
                                       if not ef._entryIdx then return false end
                                       local p2 = DB(); if not p2 then return false end
