@@ -1043,13 +1043,11 @@ qolFrame:SetScript("OnEvent", function(self)
         local lastClickEntry = nil
         local DOUBLE_CLICK_THRESHOLD = 0.4
         local installed = false   -- hooks are installed ONCE, on first enable
-        local roleFrame           -- classic role-check listener (created on install)
 
-        -- Hooks/listeners are installed only when Quick Signup is turned on, so
-        -- nothing touches the LFG execution path unless the feature is in use.
+        -- Hooks are installed only when Quick Signup is turned on, so nothing
+        -- touches the LFG execution path unless the feature is in use.
         -- hooksecurefunc/HookScript can't be undone, so the bodies keep their
-        -- setting guard for the toggle-off-after-enable case; the role-check
-        -- event is registered/unregistered live for true zero cost when off.
+        -- setting guard for the toggle-off-after-enable case.
         local function InstallQuickSignupHooks()
             if installed then return end
             installed = true
@@ -1077,8 +1075,8 @@ qolFrame:SetScript("OnEvent", function(self)
                 end
             end)
 
-            -- Auto-accept role check for Quick Signup. Holding Shift skips the
-            -- auto-accept so the dialog stays open (e.g. to type a signup note).
+            -- Auto-accept the sign-up dialog Quick Signup just opened. Holding
+            -- Shift skips it so the dialog stays open (e.g. to type a note).
             if LFGListApplicationDialog then
                 LFGListApplicationDialog:HookScript("OnShow", function(self)
                     if not (EllesmereUIDB and EllesmereUIDB.quickSignup) then return end
@@ -1087,44 +1085,62 @@ qolFrame:SetScript("OnEvent", function(self)
                     end
                 end)
             end
-
-            -- Classic Dungeon Finder role check for Quick Signup
-            roleFrame = CreateFrame("Frame")
-            roleFrame:SetScript("OnEvent", function()
-                if not (EllesmereUIDB and EllesmereUIDB.quickSignup) then return end
-                if not UnitInParty("player") then return end
-                -- Holding Shift skips the auto role-check accept
-                if IsShiftKeyDown() then return end
-                local leader, tank, healer, dps = GetLFGRoles()
-                if LFDRoleCheckPopupRoleButtonTank.checkButton:IsEnabled() then
-                    LFDRoleCheckPopupRoleButtonTank.checkButton:SetChecked(tank)
-                end
-                if LFDRoleCheckPopupRoleButtonHealer.checkButton:IsEnabled() then
-                    LFDRoleCheckPopupRoleButtonHealer.checkButton:SetChecked(healer)
-                end
-                if LFDRoleCheckPopupRoleButtonDPS.checkButton:IsEnabled() then
-                    LFDRoleCheckPopupRoleButtonDPS.checkButton:SetChecked(dps)
-                end
-                LFDRoleCheckPopupAcceptButton:Enable()
-                LFDRoleCheckPopupAcceptButton:Click()
-            end)
         end
 
         -- Called at load and from the options toggle. Installs the hooks on
-        -- first enable; toggles the role-check event registration to match.
+        -- first enable; the hook bodies re-check the setting after that.
         EllesmereUI._applyQuickSignup = function()
-            local on = EllesmereUIDB and EllesmereUIDB.quickSignup
-            if on then InstallQuickSignupHooks() end
-            if roleFrame then
-                if on then
-                    roleFrame:RegisterEvent("LFG_ROLE_CHECK_SHOW")
-                else
-                    roleFrame:UnregisterEvent("LFG_ROLE_CHECK_SHOW")
-                end
+            if EllesmereUIDB and EllesmereUIDB.quickSignup then
+                InstallQuickSignupHooks()
             end
         end
 
         EllesmereUI._applyQuickSignup()
+    end
+
+    ---------------------------------------------------------------------------
+    --  Auto Accept Role Check
+    --  Answers the Dungeon Finder role check your group leader triggers, using
+    --  the roles you already have set. Used to ride along with Quick Signup;
+    --  it is its own setting now because it applies whether or not you signed
+    --  up by double-clicking.
+    ---------------------------------------------------------------------------
+    do
+        local roleFrame   -- created lazily on first enable
+
+        -- The event is registered/unregistered with the toggle, so the feature
+        -- costs nothing at all while off.
+        EllesmereUI._applyAutoRoleCheck = function()
+            if not (EllesmereUIDB and EllesmereUIDB.autoRoleCheck) then
+                if roleFrame then roleFrame:UnregisterEvent("LFG_ROLE_CHECK_SHOW") end
+                return
+            end
+
+            if not roleFrame then
+                roleFrame = CreateFrame("Frame")
+                roleFrame:SetScript("OnEvent", function()
+                    if not (EllesmereUIDB and EllesmereUIDB.autoRoleCheck) then return end
+                    if not UnitInParty("player") then return end
+                    -- Holding Shift skips the auto role-check accept
+                    if IsShiftKeyDown() then return end
+                    local leader, tank, healer, dps = GetLFGRoles()
+                    if LFDRoleCheckPopupRoleButtonTank.checkButton:IsEnabled() then
+                        LFDRoleCheckPopupRoleButtonTank.checkButton:SetChecked(tank)
+                    end
+                    if LFDRoleCheckPopupRoleButtonHealer.checkButton:IsEnabled() then
+                        LFDRoleCheckPopupRoleButtonHealer.checkButton:SetChecked(healer)
+                    end
+                    if LFDRoleCheckPopupRoleButtonDPS.checkButton:IsEnabled() then
+                        LFDRoleCheckPopupRoleButtonDPS.checkButton:SetChecked(dps)
+                    end
+                    LFDRoleCheckPopupAcceptButton:Enable()
+                    LFDRoleCheckPopupAcceptButton:Click()
+                end)
+            end
+            roleFrame:RegisterEvent("LFG_ROLE_CHECK_SHOW")
+        end
+
+        EllesmereUI._applyAutoRoleCheck()
     end
 
     ---------------------------------------------------------------------------

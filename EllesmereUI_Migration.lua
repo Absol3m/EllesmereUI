@@ -4261,3 +4261,22 @@ EllesmereUI.RegisterMigration({
         end
     end,
 })
+
+-- QoL's Quick Signup toggle used to drive the Dungeon Finder role-check
+-- auto-accept as well, even though its label and tooltip only describe the
+-- double-click sign-up. The role check is its own setting now, so seed it from
+-- Quick Signup: anyone relying on the old coupling keeps the behavior.
+EllesmereUI.RegisterMigration({
+    id          = "qol_auto_role_check_split_v1",
+    scope       = "global",
+    description = "Seed the new QoL Auto Accept Role Check toggle from Quick Signup, which used to drive the role-check auto-accept too.",
+    body        = function(ctx)
+        local db = ctx.db
+        if not db then return end
+        -- Self-gating on the new key being absent keeps this idempotent and
+        -- never clobbers a value the user has since chosen.
+        if db.autoRoleCheck == nil and db.quickSignup then
+            db.autoRoleCheck = true
+        end
+    end,
+})

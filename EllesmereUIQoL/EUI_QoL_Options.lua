@@ -2233,6 +2233,22 @@ initFrame:SetScript("OnEvent", function(self)
               end }
         );  y = y - h
 
+        _, h = W:DualRow(parent, y,
+            { type="toggle", text="Auto Accept Role Check",
+              tooltip="Automatically accepts the Dungeon Finder role check when your group queues, keeping the roles you already have set. Hold Shift to answer it yourself.",
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.autoRoleCheck or false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.autoRoleCheck = v
+                  if EllesmereUI._applyAutoRoleCheck then
+                      EllesmereUI._applyAutoRoleCheck()
+                  end
+              end },
+            { type="spacer" }
+        );  y = y - h
+
         _, h = W:Spacer(parent, y, 20);  y = y - h
 
         ---------------------------------------------------------------------------
@@ -2397,6 +2413,7 @@ initFrame:SetScript("OnEvent", function(self)
                 EllesmereUIDB.instanceResetAnnounceMsg = ""
                 EllesmereUIDB.quickSignup = false
                 EllesmereUIDB.persistSignupNote = false
+                EllesmereUIDB.autoRoleCheck = false
                 EllesmereUIDB.ahCurrentExpansion = false
                 EllesmereUIDB.healthMacroEnabled = false
                 EllesmereUIDB.healthMacroPrio1 = 1
