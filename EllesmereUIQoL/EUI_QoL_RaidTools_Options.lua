@@ -46,11 +46,10 @@ initFrame:SetScript("OnEvent", function(self)
         return (Cfg("mode") or "never") == "never"
     end
 
-    -- The runtime owns the normalize (unknown values read as "one").
-    local function ShowAsVal()
-        if ns.ShowAs then return ns.ShowAs() end
-        return Cfg("showAs") or "one"
-    end
+    -- The runtime owns window composition outright -- reads, the write and the
+    -- "never uncheck the last one" rule. This page is a pure view over it.
+    local WindowOn    = ns.WindowOn
+    local SetWindowOn = ns.SetWindowOn
 
     -- Pull durations live in a fixed 3-slot array; each slider owns one slot.
     local function PullGet(i)
@@ -237,7 +236,8 @@ initFrame:SetScript("OnEvent", function(self)
         -- Row 2: collapsed-when-shown default | window composition. One rule
         -- for every show, keybind included -- a user who wants the keybind to
         -- toggle the full windows simply turns this off.
-        _, h = W:DualRow(parent, y,
+        local showAsRow
+        showAsRow, h = W:DualRow(parent, y,
             { type = "toggle", text = "Default to Collapsed When Shown",
               tooltip = "Shows start as a small icon, and the keybind switches between the icon and the full windows. Turn off to show full windows and make the keybind hide and show them.",
               disabled = Disabled,
@@ -246,19 +246,76 @@ initFrame:SetScript("OnEvent", function(self)
                   Set("collapsedIcon", v)
                   Refresh()
               end },
+            -- Placeholder: replaced below by a checkbox dropdown. A plain
+            -- dropdown cannot express the composition -- the windows are
+            -- cumulative, so the choices multiply as 2^n.
             { type = "dropdown", text = "Show as",
-              tooltip = "One Window combines everything into a single element; the Only choices show just that part.",
+              tooltip = "Which windows are on screen. Combine them into a single window with the cog.",
               disabled = Disabled,
-              values = { one = "One Window", two = "Two Windows",
-                         group = "Only Group & Pull", markers = "Only Markers" },
-              order = { "one", "two", "group", "markers" },
-              getValue = function() return ShowAsVal() end,
-              setValue = function(v)
-                  Set("showAs", v)
-                  Refresh()
-                  EllesmereUI:RefreshPage()  -- the scale sliders follow
-              end }
+              values = { __placeholder = "..." }, order = { "__placeholder" },
+              getValue = function() return "__placeholder" end,
+              setValue = function() end }
         );  y = y - h
+
+        -- Swap the placeholder for the checkbox dropdown, the same control
+        -- Raid Frames uses for its own "Show Groups" list.
+        do
+            local PP  = EllesmereUI.PanelPP
+            local rgn = showAsRow._rightRegion
+            if rgn then
+                if rgn._control then rgn._control:Hide() end
+
+                -- SECTIONS entries already carry exactly the key/label pair
+                -- the control reads, so it takes the canonical table itself --
+                -- the checklist cannot offer a window the runtime lacks.
+                local cbDD, cbRefresh = EllesmereUI.BuildVisOptsCBDropdown(
+                    rgn, 170, rgn:GetFrameLevel() + 2, ns.SECTIONS,
+                    WindowOn, SetWindowOn)
+                PP.Point(cbDD, "RIGHT", rgn, "RIGHT", -20, 0)
+                rgn._control = cbDD
+                rgn._lastInline = nil
+                EllesmereUI.RegisterWidgetRefresh(cbRefresh)
+
+                -- Gray + block it while the feature is off; the CB dropdown has
+                -- no native disabled handling, so the `disabled` on the config
+                -- above died with the placeholder it replaced.
+                local function UpdateDisabled()
+                    local off = Disabled()
+                    cbDD:SetAlpha(off and 0.3 or 1)
+                    cbDD:EnableMouse(not off)
+                    if rgn._label then rgn._label:SetAlpha(off and 0.3 or 1) end
+                end
+                UpdateDisabled()
+                EllesmereUI.RegisterWidgetRefresh(UpdateDisabled)
+
+                -- Inline cog: the second, independent axis. Combining is only
+                -- meaningful with more than one window checked.
+                local _, cogShow = EllesmereUI.BuildCogPopup({
+                    title = "Show as",
+                    rows = {
+                        { type = "toggle", label = "Combine Into One Window",
+                          tooltip = "Puts every checked window into a single panel that grows to fit, with one title and one position. Turn off to give each its own panel to place separately.",
+                          get = ns.Combined,
+                          set = function(v)
+                              Set("combine", v)
+                              Refresh()
+                          end },
+                    },
+                })
+                local cogBtn = CreateFrame("Button", nil, rgn)
+                cogBtn:SetSize(26, 26)
+                cogBtn:SetPoint("RIGHT", rgn._control, "LEFT", -8, 0)
+                rgn._lastInline = cogBtn
+                cogBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
+                cogBtn:SetAlpha(0.4)
+                local cogTex = cogBtn:CreateTexture(nil, "OVERLAY")
+                cogTex:SetAllPoints()
+                cogTex:SetTexture(EllesmereUI.COGS_ICON)
+                cogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
+                cogBtn:SetScript("OnLeave", function(self) self:SetAlpha(0.4) end)
+                cogBtn:SetScript("OnClick", function(self) cogShow(self) end)
+            end
+        end
 
         -- Row 3: one scale for the whole feature -- both shells and the
         -- collapsed icon wear it, whichever windows the Show as choice puts

@@ -240,6 +240,32 @@ EllesmereUI.RegisterMigration({
     end,
 })
 
+EllesmereUI.RegisterMigration({
+    id          = "raidtools_showas_to_windows_v1",
+    scope       = "profile",
+    description = "Convert the Raid Tools showAs string into the cumulative windows set",
+    body        = function(ctx)
+        local qol = ctx.profile.addons and ctx.profile.addons.EllesmereUIQoL
+        local rt  = qol and qol.raidTools
+        local old = rt and rt.showAs
+        if type(old) ~= "string" then return end
+        rt.showAs = nil
+        -- One string carried two independent axes: which content groups exist
+        -- ("group"/"markers" meant only that one) and whether they share a
+        -- shell ("two" meant they do not). Both fall straight out of it.
+        --
+        -- Raid Groups stays OFF: it did not exist when this value was written,
+        -- and an update must not put a window on screen the user never asked
+        -- for. Fresh profiles get it from the runtime's DB_DEFAULTS instead.
+        rt.windows = {
+            Group      = old ~= "markers",
+            Markers    = old ~= "group",
+            RaidGroups = false,
+        }
+        rt.combine = old ~= "two"
+    end,
+})
+
 -- Inspection helper for the slash command.
 function EllesmereUI.GetMigrationStatus()
     local out = {

@@ -1,10 +1,11 @@
 -------------------------------------------------------------------------------
 --  EllesmereUIQoL_RaidTools.lua -- Raid control panels (QoL: Raid Tools page)
 --
---  TWO content groups -- Group & Pull (ready/role/convert/disband + the pull
---  timer; plain buttons) and Markers (target row + world row; secure buttons,
---  placeable mid-combat) -- shown either as one combined window (default) or
---  as two independently positioned windows.
+--  THREE content groups -- Group & Pull (ready/role/convert/disband + the pull
+--  timer; plain buttons), Markers (target row + world row; secure buttons,
+--  placeable mid-combat) and Raid Groups (which subgroups the raid frames
+--  draw) -- shown either as one combined window (default) or as independently
+--  positioned windows.
 --
 --  SHOW MODE (p.mode) replaces the old shared-visibility system outright:
 --
@@ -59,25 +60,34 @@
 --  the icon shows when visible-and-collapsed. It is the ONLY place any of
 --  these frames is shown or hidden.
 --
---  SHOW AS (p.showAs) owns the window composition outright -- there are no
---  separate per-panel enable toggles:
+--  SHOW AS owns the window composition outright -- there are no separate
+--  per-panel enable toggles. Two INDEPENDENT axes, because four named values
+--  ("one"/"two"/"group"/"markers") could not survive a third content group:
+--  the combinations grow as 2^n while the names grow as n.
 --
---    "one"     -- the default. Both content groups in the Group & Pull shell,
---                 which grows to fit and retitles to "Raid Tools"; ONE unlock
---                 element positioned by pos.Group. The markers holder
---                 re-parents (OOC) into the shell; holders are plain frames,
---                 so the move is an ordinary SetParent and the secure buttons
---                 never change parents themselves.
---    "two"     -- each content group in its own shell, two unlock elements.
---                 The Markers shell drops its collapse button here: one
---                 collapse control (Group & Pull's) folds the whole feature.
---    "group"   -- only the Group & Pull shell exists on screen.
---    "markers" -- only the Markers shell exists on screen; the collapsed
---                 icon anchors to IT in this mode.
+--    p.windows -- a set: which content groups are on screen at all. Any
+--                 combination; the options control refuses to uncheck the
+--                 last one, so at least one is always present.
+--    p.combine -- true (the default): every checked group shares ONE shell,
+--                 which grows to fit, retitles to "Raid Tools" and carries the
+--                 single unlock element. False: each checked group gets its
+--                 own shell and its own unlock element.
 --
---  One Window Scale (p.scale) covers every form: both shells and the
---  collapsed icon wear the same value, whichever windows the Show as choice
---  puts on screen.
+--  Holders re-parent (OOC) into whichever shell hosts them; they are plain
+--  frames, so the move is an ordinary SetParent and the secure marker buttons
+--  never change parents themselves.
+--
+--  The PRIMARY window -- the first checked group in SECTION_KEYS order -- is
+--  the one that hosts the combined shell, anchors the collapsed icon and
+--  carries the collapse button. A second collapse control on another shell
+--  would just be a duplicate: one button folds the whole feature.
+--
+--  p.showAs is the retired v8.6.6 form, converted across every saved profile
+--  by raidtools_showas_to_windows_v1 in EllesmereUI_Migration.lua. Nothing
+--  here reads it.
+--
+--  One Window Scale (p.scale) covers every form: every shell and the collapsed
+--  icon wear the same value, whichever windows are on screen.
 -------------------------------------------------------------------------------
 local _, ns = ...
 
@@ -188,17 +198,24 @@ end
 -- The collapsed-state button IS this image: no chrome, no border, no inset.
 local COLLAPSED_ICON_TEX = "Interface\\AddOns\\EllesmereUI\\media\\icons\\raid-tools.png"
 
--- Canonical section list. Build order, stack order, DB key set, window titles
--- and unlock-mover labels all derive from this one table.
+-- Canonical section list. Stack order, DB key set, window composition, window
+-- titles and unlock-mover labels all derive from this one table -- adding a row
+-- changes all of those with no other edit. Building the content is the one part
+-- that stays hand-wired: each group draws something different, so a fourth
+-- would also need its Build...Content function called from BuildAll.
 --
 -- `label` reaches EllesmereUI.L as a variable, which the static key extractor
 -- cannot see -- the documented arrangement for exactly this case (see the
 -- header of .tools/extract-locale-keys.sh); the in-game /euiloc harvester picks
 -- them up, the same way every widget label in the suite is already handled.
 local SECTIONS = {
-    { key = "Group",   label = "Group & Pull" },
-    { key = "Markers", label = "Markers" },
+    { key = "Group",      label = "Group & Pull" },
+    { key = "Markers",    label = "Markers" },
+    { key = "RaidGroups", label = "Raid Groups" },
 }
+-- The options page builds its window checklist from this, so the control can
+-- never offer a window the runtime does not have.
+ns.SECTIONS = SECTIONS
 
 -- One-window title; reaches L as a variable like the section labels.
 local COMBINED_LABEL = "Raid Tools"
@@ -221,9 +238,9 @@ local previewOn = false        -- Raid Tools settings page is in front (see Appl
 local toggleButton             -- keybind target; also the out-of-combat path
 local sections = {}            -- key -> shell frame
 local shellTitle = {}          -- key -> title fontstring
-local groupHolder, markersHolder   -- plain content holders (see header)
+local holders = {}             -- key -> plain content holder (see header)
 local iconBtn                  -- collapsed-state square
-local GROUP_CONTENT_H, MARKERS_CONTENT_H   -- computed at build
+local groupsPending            -- true when combat blocked a raid-frame re-render
 local Apply                    -- forward: the event handler closes over it
 
 -- ONE representation of each secure decision, run from both paths.
@@ -372,6 +389,7 @@ end
 local groupButtons = {}        -- plain buttons, enable-gated on assist
 local markerButtons = {}       -- secure buttons, dimmed on assist
 local pullButtons = {}         -- fixed set of 3; durations are re-labelled live
+local raidGroupButtons = {}    -- plain buttons, gated on the raid frames only
 local convertButton
 
 -- Both marker rows draw Blizzard's own raid target sheet -- the texture the
@@ -402,9 +420,13 @@ local DB_DEFAULTS = {
         -- keybind) starts as the small icon; click it to expand. Turning this
         -- off makes the keybind a plain full-window toggle.
         collapsedIcon = true,
-        -- "one" | "two" | "group" | "markers" (see header). The single owner
-        -- of window composition; there are no per-panel enable toggles.
-        showAs        = "one",
+        -- Window composition (see header). Cumulative set + a combine flag;
+        -- there are no per-panel enable toggles. The v8.6.6 showAs string is
+        -- converted by raidtools_showas_to_windows_v1 in EllesmereUI_Migration
+        -- .lua, which runs across every saved profile -- not just the active
+        -- one -- before this default can apply.
+        windows       = { Group = true, Markers = true, RaidGroups = true },
+        combine       = true,
         -- One scale for the whole feature: whichever windows the Show as
         -- choice puts on screen (and the collapsed icon) all wear it.
         scale         = 1,
@@ -441,14 +463,63 @@ local function Mode()
     return (p and p.mode) or "never"
 end
 
--- The Show as choice, normalized: any unset/unknown value reads as "one".
-local function ShowAs()
+-- Is this content group on screen at all? A missing key reads as on, which is
+-- how a content group added in a later version arrives switched on rather than
+-- invisible until the user finds the control.
+local function WindowOn(key)
     local p = P()
-    local v = p and p.showAs
-    if v ~= "two" and v ~= "group" and v ~= "markers" then v = "one" end
-    return v
+    local w = p and p.windows
+    return not w or w[key] ~= false
 end
-ns.ShowAs = ShowAs
+ns.WindowOn = WindowOn
+
+local function Combined()
+    local p = P()
+    return not p or p.combine ~= false
+end
+ns.Combined = Combined
+
+-- The first checked content group in canonical order: hosts the combined
+-- shell, anchors the collapsed icon, carries the collapse button. Never nil --
+-- the options control keeps at least one checked, and a profile hand-edited to
+-- none still resolves to the first key rather than leaving the feature
+-- unreachable.
+local function PrimaryWindow()
+    for _, key in ipairs(SECTION_KEYS) do
+        if WindowOn(key) then return key end
+    end
+    return SECTION_KEYS[1]
+end
+
+-- Does this key own a shell on screen? Combined mode puts everything in the
+-- primary's shell, so only that one is live. The single predicate behind
+-- visibility, positioning, the default stack and the unlock rows -- they
+-- cannot disagree.
+local function ShellActive(key)
+    if Combined() then return key == PrimaryWindow() end
+    return WindowOn(key)
+end
+
+-- The options page is a pure view: it holds no rule of its own, so a profile
+-- import or any future writer inherits this guard rather than re-deriving it.
+--
+-- Refuses to uncheck the last window. An empty set would leave the feature
+-- enabled with nothing on screen, and the only way back would be the control
+-- that just emptied it.
+function ns.SetWindowOn(key, on)
+    local p = P()
+    local w = p and p.windows
+    if not w then return end
+    if not on then
+        local another = false
+        for _, k in ipairs(SECTION_KEYS) do
+            if k ~= key and WindowOn(k) then another = true; break end
+        end
+        if not another then return end
+    end
+    w[key] = on
+    Apply()
+end
 
 local function WindowScale()
     local p = P()
@@ -472,9 +543,14 @@ local function SetButtonEnabled(b, on)
 end
 
 -- Action button in the Window Skins style: flat fill, 1px line, white hover,
--- white label (WSkin.Button + WhiteButtonLabel, replicated). `needsLeader`
--- narrows the gate from assist to leader.
-local function MakeGroupButton(parent, text, width, onClick, needsLeader)
+-- white label (WSkin.Button + WhiteButtonLabel, replicated).
+--
+-- `needsLeader` narrows the gate from assist to leader. `registry` is the list
+-- RefreshPermissions walks; the raid group toggles pass their own, because they
+-- change what THIS client draws and so are never permission-gated -- but they
+-- want the identical chrome, and a second constructor would drift from this one
+-- the first time the skin moves.
+local function MakeGroupButton(parent, text, width, onClick, needsLeader, registry)
     local b = CreateFrame("Button", nil, parent)
     b:SetSize(width, ROW_H)
     SkinButtonChrome(b)
@@ -484,7 +560,8 @@ local function MakeGroupButton(parent, text, width, onClick, needsLeader)
     b:SetScript("OnClick", onClick)
     b._lbl = lbl
     b.needsLeader = needsLeader
-    groupButtons[#groupButtons + 1] = b
+    registry = registry or groupButtons
+    registry[#registry + 1] = b
     return b
 end
 
@@ -556,6 +633,139 @@ local function MakeMarkerButton(parent, index, kind)
 
     markerButtons[#markerButtons + 1] = b
     return b
+end
+
+-------------------------------------------------------------------------------
+--  Raid group filter
+--
+--  Which subgroups the raid frames draw is a Raid Frames setting -- that module
+--  already exposes it as a "Show Groups" checklist in its own options page.
+--  This window is a second way to the same switch, reachable mid-raid instead
+--  of three levels into the options window, so it drives that module directly
+--  and keeps no copy of the state: every paint reads the live setting, so the
+--  two controls cannot drift apart.
+--
+--  Both halves of the reach are the framework's own, not a new contract:
+--  Lite.GetAddon(folder, silent) is how the parent reads a child's profile
+--  (EllesmereUI_SpecOverrides.lua's LiteProfile), and _ERF_RefreshAll is
+--  already registered as Raid Frames' refresh in that file's REFRESH_FNS. The
+--  silent flag returning nil for a missing addon IS the fallback detection.
+--
+--  Nothing here is gated on lead or assist: this changes what THIS client
+--  draws and takes nothing from anyone.
+-------------------------------------------------------------------------------
+local RAID_GROUPS = 8
+-- Both reach L as variables, like MARKER_ROWS. The second replaces the first
+-- in the row's own label slot when there is nothing to drive: it explains the
+-- greyed buttons without costing a line of height, so the window keeps the
+-- geometry ApplyLayout measured at build.
+local RAIDGROUPS_ROW_LABEL   = "Groups"
+local RAIDGROUPS_ROW_NO_RF   = "Requires EllesmereUI Raid Frames"
+local raidGroupsRowLabel
+
+-- Re-resolved on every call: nil while the Raid Frames addon is disabled, and
+-- a profile switch repoints .profile underneath.
+local function RaidFramesProfile()
+    local get = EllesmereUI.Lite and EllesmereUI.Lite.GetAddon
+    local a = get and get("EllesmereUIRaidFrames", true)
+    return a and a.db and a.db.profile
+end
+
+-- Matches how the raid frames themselves read it: absent means unfiltered.
+-- Their DEFAULT is groups 1-6 (7 and 8 off), which this window shows as-is --
+-- a second default here would be exactly the drift the design forbids.
+local function GroupShown(index)
+    local p = RaidFramesProfile()
+    local vg = p and p.visibleGroups
+    return not vg or vg[index] ~= false
+end
+
+local function SetGroupShown(index, on)
+    local p = RaidFramesProfile()
+    local vg = p and p.visibleGroups
+    if not vg then return end
+    vg[index] = on
+
+    -- Applying this rebuilds secure group headers, which the game forbids in
+    -- combat: their _LayoutGroupsImpl returns early under lockdown, and their
+    -- own post-combat pass only re-lays out for roster and size-tier changes,
+    -- so it would never pick this up. The setting lands now; the re-render
+    -- waits for PLAYER_REGEN_ENABLED.
+    --
+    -- Deliberately caller-side. The deeper fix is a dirty flag where their
+    -- layout bails plus a replay in their regen branch -- the pattern that
+    -- module already runs three times over (anchorDirty, FB.applyDirty,
+    -- XF.applyDirty) -- which would also fix every OTHER caller of
+    -- _ERF_RefreshAll. That is a Raid Frames change and belongs to its own PR.
+    if InCombatLockdown() then
+        groupsPending = true
+    elseif _G._ERF_RefreshAll then
+        _G._ERF_RefreshAll()
+    end
+end
+
+-- Accent numeral = this group is drawn. The colour is passed in rather than
+-- resolved here: the caller repaints eight buttons from one accent read.
+local function PaintRaidGroup(b, shown, ar, ag, ab)
+    if shown then
+        b._lbl:SetTextColor(ar, ag, ab, 1)
+    else
+        b._lbl:SetTextColor(1, 1, 1, 0.35)
+    end
+end
+
+local function MakeRaidGroupButton(parent, index, width)
+    -- Declared before the call: the click closure reaches the button through
+    -- it, and `local b = ...` would not be in scope inside its own initializer.
+    -- Same shape the pull buttons use.
+    local b
+    b = MakeGroupButton(parent, "", width, function()
+        SetGroupShown(index, not GroupShown(index))
+        PaintRaidGroup(b, GroupShown(index), EllesmereUI.GetAccentColor())
+    end, nil, raidGroupButtons)
+    b._lbl:SetText(tostring(index))
+    return b
+end
+
+-- Repaints all eight, and cuts input when there are no EllesmereUI raid frames
+-- to redraw.
+--
+-- That is the whole fallback for a user who runs the Blizzard raid frames (or
+-- another addon's) instead. Driving Blizzard's own group filter was considered
+-- and rejected: CompactRaidFrameManager is protected, and this filter is the
+-- one part of it whose UI Blizzard has already removed -- the functions linger
+-- but nothing exercises them, and there is no supported read to paint from.
+-- Anyone who disabled our raid frames is using a replacement that carries its
+-- own group filter anyway.
+--
+-- Memoized on the state it draws, the same reason RefreshPermissions is: this
+-- runs on GROUP_ROSTER_UPDATE, which bursts through a raid night, and nothing
+-- it reads changes on that event. `force` is for callers that have to repaint
+-- regardless -- Apply, whose accent colour or fonts may have moved underneath.
+local lastGroupsMask
+local function RefreshRaidGroups(force)
+    local p  = RaidFramesProfile()
+    local vg = p and p.visibleGroups
+
+    -- One integer standing for "everything this function would draw": the
+    -- eight toggles plus whether there is anything to drive at all.
+    local mask, bit = p and 1 or 0, 2
+    for i = 1, RAID_GROUPS do
+        if not vg or vg[i] ~= false then mask = mask + bit end
+        bit = bit * 2
+    end
+    if not force and mask == lastGroupsMask then return end
+    lastGroupsMask = mask
+
+    local ar, ag, ab = EllesmereUI.GetAccentColor()
+    for i, b in ipairs(raidGroupButtons) do
+        SetButtonEnabled(b, p ~= nil)
+        PaintRaidGroup(b, not vg or vg[i] ~= false, ar, ag, ab)
+    end
+    if raidGroupsRowLabel then
+        raidGroupsRowLabel:SetText(EllesmereUI.L(
+            p and RAIDGROUPS_ROW_LABEL or RAIDGROUPS_ROW_NO_RF))
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -791,10 +1001,10 @@ end
 -- Group & Pull content, in its own plain holder so one-window mode can treat
 -- it uniformly with the markers holder.
 local function BuildGroupContent()
-    groupHolder = CreateFrame("Frame", nil, sections.Group)
-    groupHolder:SetWidth(PANEL_W)
-    fontOwners[#fontOwners + 1] = groupHolder
-    local f = groupHolder
+    holders.Group = CreateFrame("Frame", nil, sections.Group)
+    holders.Group:SetWidth(PANEL_W)
+    fontOwners[#fontOwners + 1] = holders.Group
+    local f = holders.Group
     local y = 0
 
     -- MakeGroupButton runs labels through L itself.
@@ -831,8 +1041,7 @@ local function BuildGroupContent()
     cancel:SetPoint("TOPLEFT", f, "TOPLEFT", PAD + (w + ROW_GAP) * PULL_SLOTS, y)
     y = y - ROW_H
 
-    GROUP_CONTENT_H = -y
-    f:SetHeight(GROUP_CONTENT_H)
+    f:SetHeight(-y)
 end
 
 -- Row order matches how they are used: unit markers first, ground markers
@@ -842,20 +1051,27 @@ local MARKER_ROWS = {
     { kind = "world",  label = "World"  },
 }
 
+-- The dim caption that names a row inside a holder. Shared by the marker rows
+-- and the raid group row so the two cannot style differently; returns the
+-- fontstring, because one caller keeps writing to it.
+local function MakeRowLabel(f, y)
+    local lbl = TrackFont(f, EllesmereUI.MakeFont(f, 9, nil, 1, 1, 1), 9)
+    lbl:SetAlpha(0.55)
+    lbl:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, y)
+    return lbl
+end
+
 local function BuildMarkersContent()
-    markersHolder = CreateFrame("Frame", nil, sections.Markers)
-    markersHolder:SetWidth(PANEL_W)
-    fontOwners[#fontOwners + 1] = markersHolder
-    local f = markersHolder
+    holders.Markers = CreateFrame("Frame", nil, sections.Markers)
+    holders.Markers:SetWidth(PANEL_W)
+    fontOwners[#fontOwners + 1] = holders.Markers
+    local f = holders.Markers
     local y = 0
 
     -- 8 markers + a clear button per row, evenly spread across the width.
     local step = (PANEL_W - PAD * 2 - MARKER_SZ) / 8
     for r, row in ipairs(MARKER_ROWS) do
-        local lbl = TrackFont(f, EllesmereUI.MakeFont(f, 9, nil, 1, 1, 1), 9)
-        lbl:SetAlpha(0.55)
-        lbl:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, y)
-        lbl:SetText(EllesmereUI.L(row.label))
+        MakeRowLabel(f, y):SetText(EllesmereUI.L(row.label))
         y = y - MARKER_LBL_H - 2
 
         for i = 0, 8 do
@@ -866,8 +1082,33 @@ local function BuildMarkersContent()
         if r < #MARKER_ROWS then y = y - ROW_GAP * 2 end
     end
 
-    MARKERS_CONTENT_H = -y
-    f:SetHeight(MARKERS_CONTENT_H)
+    f:SetHeight(-y)
+end
+
+-- Raid Groups content: one row of eight numbered toggles, sharing the panel
+-- width the way the pull row does. The sub-label matters most in combined
+-- mode, where a bare row of numerals under two marker rows would read as
+-- nothing in particular.
+local function BuildRaidGroupsContent()
+    holders.RaidGroups = CreateFrame("Frame", nil, sections.RaidGroups)
+    holders.RaidGroups:SetWidth(PANEL_W)
+    fontOwners[#fontOwners + 1] = holders.RaidGroups
+    local f = holders.RaidGroups
+    local y = 0
+
+    -- Text is RefreshRaidGroups's to own -- it doubles as the no-raid-frames
+    -- explanation.
+    raidGroupsRowLabel = MakeRowLabel(f, y)
+    y = y - MARKER_LBL_H - 2
+
+    local w = (PANEL_W - PAD * 2 - (RAID_GROUPS - 1) * ROW_GAP) / RAID_GROUPS
+    for i = 1, RAID_GROUPS do
+        local b = MakeRaidGroupButton(f, i, w)
+        b:SetPoint("TOPLEFT", f, "TOPLEFT", PAD + (w + ROW_GAP) * (i - 1), y)
+    end
+    y = y - ROW_H
+
+    f:SetHeight(-y)
 end
 
 -- The collapsed-state square: bg + border + the icon, expanding on click.
@@ -933,11 +1174,13 @@ end
 
 local function BuildAll()
     if sections.Group then return end
-    MakeShell("Group")
-    MakeShell("Markers")
+    for _, key in ipairs(SECTION_KEYS) do MakeShell(key) end
     BuildGroupContent()
     BuildMarkersContent()
+    BuildRaidGroupsContent()
     BuildCollapsedIcon()
+    -- Re-anchored by ApplyLayout to whichever shell is primary; this only has
+    -- to be a resolvable anchor before the first layout pass.
     iconBtn:ClearAllPoints()
     iconBtn:SetPoint("TOPLEFT", sections.Group, "TOPLEFT", 0, 0)
 
@@ -978,58 +1221,66 @@ end
 -- so the re-parent is an ordinary SetParent.
 local function ApplyLayout()
     local p = P()
-    local showAs = ShowAs()
-    local winGroup, winMarkers = sections.Group, sections.Markers
+    local combined = Combined()
+    local primary = PrimaryWindow()
 
+    -- One collapse control, on the primary window: it folds the whole feature,
+    -- so a second on any other shell would be a duplicate.
     local collapseUI = p and p.collapsedIcon ~= false
-    winGroup._collapseBtn:SetShown(collapseUI)
-    -- Two Windows: only Group & Pull carries the collapse control -- one
-    -- button folds the whole feature, and a second on Markers would just be
-    -- a duplicate. Markers keeps its own ONLY when it is the lone window.
-    winMarkers._collapseBtn:SetShown(collapseUI and showAs ~= "two")
-
-    if showAs == "one" then
-        shellTitle.Group:SetText(EllesmereUI.L(COMBINED_LABEL))
-        groupHolder:SetShown(true)
-        groupHolder:SetParent(winGroup)
-        groupHolder:ClearAllPoints()
-        groupHolder:SetPoint("TOPLEFT", winGroup, "TOPLEFT", 0, -CONTENT_TOP)
-        markersHolder:SetShown(true)
-        markersHolder:SetParent(winGroup)
-        markersHolder:ClearAllPoints()
-        markersHolder:SetPoint("TOPLEFT", winGroup, "TOPLEFT", 0,
-            -CONTENT_TOP - GROUP_CONTENT_H - ROW_GAP * 2)
-        winGroup:SetHeight(CONTENT_TOP + GROUP_CONTENT_H + ROW_GAP * 2
-            + MARKERS_CONTENT_H + PAD)
-    else
-        -- Every split mode parents each holder to its own shell; which shells
-        -- actually SHOW is ApplyVisibility's call (the enabled attribute).
-        shellTitle.Group:SetText(EllesmereUI.L(SECTION_LABEL.Group))
-        groupHolder:SetParent(winGroup)
-        groupHolder:SetShown(true)
-        groupHolder:ClearAllPoints()
-        groupHolder:SetPoint("TOPLEFT", winGroup, "TOPLEFT", 0, -CONTENT_TOP)
-        winGroup:SetHeight(CONTENT_TOP + GROUP_CONTENT_H + PAD)
-
-        markersHolder:SetParent(winMarkers)
-        markersHolder:SetShown(true)
-        markersHolder:ClearAllPoints()
-        markersHolder:SetPoint("TOPLEFT", winMarkers, "TOPLEFT", 0, -CONTENT_TOP)
-        winMarkers:SetHeight(CONTENT_TOP + MARKERS_CONTENT_H + PAD)
+    for _, key in ipairs(SECTION_KEYS) do
+        sections[key]._collapseBtn:SetShown(collapseUI and key == primary)
     end
 
-    -- The collapsed icon rides the shell the mode actually shows: Markers-only
-    -- anchors (and scales, see Apply) to the Markers shell, everything else to
-    -- Group & Pull.
+    if combined then
+        local host = sections[primary]
+        local y, shown = CONTENT_TOP, 0
+        for _, key in ipairs(SECTION_KEYS) do
+            local hold = holders[key]
+            if WindowOn(key) then
+                shown = shown + 1
+                hold:SetShown(true)
+                hold:SetParent(host)
+                hold:ClearAllPoints()
+                hold:SetPoint("TOPLEFT", host, "TOPLEFT", 0, -y)
+                y = y + hold:GetHeight() + ROW_GAP * 2
+            else
+                -- Left parented where it was: a hidden holder anchors nothing
+                -- and costs nothing, and re-parenting it would be work with no
+                -- observable effect.
+                hold:SetShown(false)
+            end
+        end
+        -- The last group added a trailing gap that no content follows.
+        host:SetHeight(y - ROW_GAP * 2 + PAD)
+        -- "Raid Tools" only when the window actually carries more than one
+        -- content group; a single one keeps its own name.
+        shellTitle[primary]:SetText(EllesmereUI.L(
+            (shown > 1) and COMBINED_LABEL or SECTION_LABEL[primary]))
+    else
+        -- Each holder returns to its own shell; which shells actually SHOW is
+        -- ApplyVisibility's call (the enabled attribute).
+        for _, key in ipairs(SECTION_KEYS) do
+            local shell, hold = sections[key], holders[key]
+            shellTitle[key]:SetText(EllesmereUI.L(SECTION_LABEL[key]))
+            hold:SetParent(shell)
+            hold:SetShown(true)
+            hold:ClearAllPoints()
+            hold:SetPoint("TOPLEFT", shell, "TOPLEFT", 0, -CONTENT_TOP)
+            shell:SetHeight(CONTENT_TOP + hold:GetHeight() + PAD)
+        end
+    end
+
+    -- The collapsed icon rides the shell that is actually on screen.
     iconBtn:ClearAllPoints()
-    iconBtn:SetPoint("TOPLEFT",
-        (showAs == "markers") and winMarkers or winGroup, "TOPLEFT", 0, 0)
+    iconBtn:SetPoint("TOPLEFT", sections[primary], "TOPLEFT", 0, 0)
 
     -- Heights just moved: re-crop the backdrop art so it covers instead of
     -- stretches (the skins hook SetHeight for this; our heights only ever
     -- change right here, so a direct call is the whole hook).
-    if winGroup._bgFit then winGroup._bgFit() end
-    if winMarkers._bgFit then winMarkers._bgFit() end
+    for _, key in ipairs(SECTION_KEYS) do
+        local shell = sections[key]
+        if shell._bgFit then shell._bgFit() end
+    end
 end
 
 -- Positions round-trip through unlock mode's CENTER/CENTER convention.
@@ -1046,8 +1297,11 @@ local function DefaultPos(key)
     -- Markers under Group & Pull. A saved position always wins over this.
     local MARGIN = 20
     local top = -MARGIN
-    if key == "Markers" then
-        top = top - (sections.Group:GetHeight() * WindowScale() + ROW_GAP)
+    for _, k in ipairs(SECTION_KEYS) do
+        if k == key then break end
+        if ShellActive(k) then
+            top = top - (sections[k]:GetHeight() * WindowScale() + ROW_GAP)
+        end
     end
     -- Screen-space margin converted into the frame's own scaled units.
     local s = WindowScale()
@@ -1088,12 +1342,12 @@ local function ApplyPositions()
     -- Bars, Aura Reminders and the Cooldown Manager already carry.
     if EllesmereUI._unlockActive then return end
 
-    -- Each shell is positioned only when the Show as choice can put it on
-    -- screen; One Window and Only Group & Pull ride pos.Group, Only Markers
-    -- rides pos.Markers.
-    local showAs = ShowAs()
-    if showAs ~= "markers" then ApplySectionPosition("Group") end
-    if showAs == "two" or showAs == "markers" then ApplySectionPosition("Markers") end
+    -- Only the shells that can be on screen: combined mode positions the
+    -- primary alone (everything rides its pos), split mode positions each
+    -- checked window from its own.
+    for _, key in ipairs(SECTION_KEYS) do
+        if ShellActive(key) then ApplySectionPosition(key) end
+    end
 end
 
 -- The whole replacement for the old shared-visibility machinery: two literal
@@ -1120,14 +1374,6 @@ local function ApplyVisibility()
         visNow = true
     end
 
-    -- Which SHELLS may show, straight from Show as: the Group shell is the
-    -- window everywhere except Markers-only; the Markers shell exists only in
-    -- Two Windows and Markers-only.
-    local showAs = ShowAs()
-    local shellOn = {
-        Group   = showAs ~= "markers",
-        Markers = showAs == "two" or showAs == "markers",
-    }
     -- One seed for every show (see header): Default to Collapsed When Shown.
     -- With the toggle off the seed is "expanded" and the icon never shows.
     local startExpanded = not (p and p.collapsedIcon ~= false)
@@ -1147,7 +1393,9 @@ local function ApplyVisibility()
 
     for _, key in ipairs(SECTION_KEYS) do
         local f = sections[key]
-        local on = shellOn[key] and true or false
+        -- Combined mode puts everything in the primary's shell, so only that
+        -- one exists on screen; split mode gives one per checked window.
+        local on = ShellActive(key)
 
         f:SetAttribute("enabled", on)
         f:SetAttribute("visible", visNow)
@@ -1212,12 +1460,20 @@ local function EnsureEvents()
             -- deferred by combat must complete even though the profile
             -- already reads never -- swallowing it here is how panels get
             -- stranded on screen.
+            -- A group-filter click during combat wrote the setting but could
+            -- not rebuild the raid frames. Runs before the Apply branch, which
+            -- returns without reaching it.
+            if event == "PLAYER_REGEN_ENABLED" and groupsPending then
+                groupsPending = false
+                if _G._ERF_RefreshAll then _G._ERF_RefreshAll() end
+            end
             if event == "PLAYER_REGEN_ENABLED" and applyPending then
                 Apply()
                 return
             end
             if Mode() == "never" then return end
             RefreshPermissions()
+            RefreshRaidGroups()
         end)
     end
     ev:RegisterEvent("GROUP_ROSTER_UPDATE")
@@ -1250,12 +1506,10 @@ local function RegisterUnlock()
             noResize = true,
             getFrame = function()
                 if Mode() == "never" then return nil end
-                -- Offer exactly the shells the Show as choice puts on screen:
-                -- One Window / Only Group & Pull = the Group element alone,
-                -- Two Windows = both, Only Markers = the Markers element alone.
-                local showAs = ShowAs()
-                if key == "Group" and showAs == "markers" then return nil end
-                if key == "Markers" and showAs ~= "two" and showAs ~= "markers" then return nil end
+                -- Offer exactly the shells that are on screen: combined mode
+                -- collapses to the primary element alone, split mode gives one
+                -- per checked window.
+                if not ShellActive(key) then return nil end
                 BuildAll()
                 return sections[key]
             end,
@@ -1343,8 +1597,7 @@ function Apply()
     ApplyLayout()
     -- One Window Scale for everything the feature draws.
     local scale = WindowScale()
-    sections.Group:SetScale(scale)
-    sections.Markers:SetScale(scale)
+    for _, key in ipairs(SECTION_KEYS) do sections[key]:SetScale(scale) end
     iconBtn:SetScale(scale)
     ApplyPositions()
     ApplyVisibility()
@@ -1352,6 +1605,7 @@ function Apply()
     ApplyFonts()
     RefreshPullTimes()
     RefreshPermissions(true)
+    RefreshRaidGroups(true)
 end
 _G._EUI_RaidTools_Apply = Apply
 
