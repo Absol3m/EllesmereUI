@@ -36,6 +36,8 @@ externals:
     tag: latest
   Libs/LibKeystone:
     url: https://github.com/BigWigsMods/LibKeystone.git/LibKeystone
+  Libs/LibDurability:
+    url: https://repos.wowace.com/wow/libdurability/trunk/LibDurability
 
 enable-nolib-creation: no
 
