@@ -211,7 +211,12 @@ local COLLAPSED_ICON_TEX = "Interface\\AddOns\\EllesmereUI\\media\\icons\\raid-t
 local SECTIONS = {
     { key = "Group",      label = "Group & Pull" },
     { key = "Markers",    label = "Markers" },
-    { key = "RaidGroups", label = "Raid Groups" },
+    -- "Visibility", not "Raid Groups": this panel only chooses which subgroups
+    -- the raid frames draw. The window that actually moves people between
+    -- subgroups is a different feature, and two things called the same thing
+    -- is how a raid leader clicks the wrong one. The KEY stays RaidGroups --
+    -- it persists in saved anchors and renaming it breaks existing links.
+    { key = "RaidGroups", label = "Raid Group Visibility" },
 }
 -- The options page builds its window checklist from this, so the control can
 -- never offer a window the runtime does not have.
