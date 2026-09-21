@@ -12,10 +12,11 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --  twice, which the server answers with an internal mail database error and
 --  which leaves an emptied item mail undeleted.
 --
---  Hooking: every hook here is additive (HookScript), never a replacement of a
+--  Hooking: every hook here is additive (HookScript, and hooksecurefunc on the
+--  function that builds the icon button's tooltip), never a replacement of a
 --  Blizzard handler, so the default click and the default tooltip always still
---  run. HookScript cannot be undone, so the enabled checks live inside the
---  handlers -- toggling the feature applies at once with nothing to re-hook.
+--  run. Neither can be undone, so the enabled checks live inside the handlers
+--  -- toggling the feature applies at once with nothing to re-hook.
 -------------------------------------------------------------------------------
 
 local ROW_PATTERN = "^MailItem%d+$"
@@ -110,35 +111,52 @@ end
 --  Tooltip
 -------------------------------------------------------------------------------
 
--- An inbox refresh can re-fire OnEnter with no OnLeave in between, which would
--- stack our lines onto a tooltip that already carries them. Kept here rather
--- than stamped onto GameTooltip so no Blizzard frame gains a key of ours.
-local decoratedIndex
+-- State lives here rather than on GameTooltip so no Blizzard frame gains a key
+-- of ours.
+--   openedFor : the frame we opened a tooltip for because Blizzard had none
+--               there. A tooltip we opened is ours to close: nobody else will.
+--   deco*     : what we last appended, to tell "our lines are already there"
+--               from "Blizzard rebuilt the tooltip and they are gone".
+local openedFor
+local decoFrame, decoIndex, decoLines
 
 local HINT_R, HINT_G, HINT_B = 1, 0.82, 0
 
-local function OnRowLeave()
-    decoratedIndex = nil
+local function OnRowLeave(frame)
+    if openedFor == frame then
+        openedFor = nil
+        if GameTooltip:IsOwned(frame) then GameTooltip:Hide() end
+    end
+    decoFrame = nil
 end
 
 local function OnRowEnter(frame)
     local index, name = LiveIndex(frame)
     if not index then return end
-    if decoratedIndex == index and GameTooltip:IsShown() then return end
+    -- Blizzard rebuilds an icon button's tooltip on enter and again every frame
+    -- while it is hovered, and each rebuild lands here: only add our lines when
+    -- they are not already there.
+    if decoFrame == frame and decoIndex == index and GameTooltip:IsShown()
+       and GameTooltip:IsOwned(frame) and GameTooltip:NumLines() == decoLines then
+        return
+    end
 
     local itemCount, _, wasReturned, _, canReply = select(8, GetInboxHeaderInfo(index))
     local opened = false
 
     -- Claims the tooltip on the first line we actually have, so a row with
     -- nothing to add is left completely alone. Appends when Blizzard already
-    -- owns a tooltip for this row, otherwise opens one -- never stomps a
+    -- owns a tooltip for this frame, otherwise opens one -- never stomps a
     -- tooltip belonging to something else.
     local function Emit(text, isHint)
         if not opened then
-            local owner = GameTooltip:GetOwner()
-            if not (GameTooltip:IsShown() and (owner == frame or owner == _G[name])) then
+            if GameTooltip:IsShown() and GameTooltip:IsOwned(frame) then
+                -- A tooltip we opened earlier starts over instead of stacking.
+                if openedFor == frame then GameTooltip:ClearLines() end
+            else
                 GameTooltip:SetOwner(frame, "ANCHOR_RIGHT")
                 GameTooltip:ClearLines()
+                openedFor = frame
             end
             opened = true
         end
@@ -179,7 +197,7 @@ local function OnRowEnter(frame)
 
     if opened then
         GameTooltip:Show()
-        decoratedIndex = index
+        decoFrame, decoIndex, decoLines = frame, index, GameTooltip:NumLines()
     end
 end
 
@@ -189,10 +207,10 @@ end
 
 local hooked = false
 
-local function HookWidget(widget)
+local function HookWidget(widget, withEnter)
     if not (widget and widget.HasScript) then return end
     if widget:HasScript("OnClick") then widget:HookScript("OnClick", OnRowClick) end
-    if widget:HasScript("OnEnter") then widget:HookScript("OnEnter", OnRowEnter) end
+    if withEnter and widget:HasScript("OnEnter") then widget:HookScript("OnEnter", OnRowEnter) end
     if widget:HasScript("OnLeave") then widget:HookScript("OnLeave", OnRowLeave) end
 end
 
@@ -202,10 +220,15 @@ local function EnsureHooks()
     for i = 1, (_G.INBOXITEMS_TO_DISPLAY or 7) do
         local row = _G["MailItem" .. i]
         if row then
-            HookWidget(row)
-            HookWidget(row.Button)
+            HookWidget(row, true)
+            HookWidget(row.Button, false)   -- its enter is covered by the hook below
         end
     end
+    -- The icon button's tooltip is built by this function: on enter, on
+    -- MAIL_INBOX_UPDATE and every frame while hovered (the button's OnUpdate).
+    -- Hooking the function rather than the script puts our lines back after
+    -- each rebuild.
+    hooksecurefunc("InboxFrameItem_OnEnter", OnRowEnter)
     hooked = true
 end
 
