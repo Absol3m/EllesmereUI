@@ -1,11 +1,13 @@
 if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_ClientGate.lua)
 -------------------------------------------------------------------------------
 --  EllesmereUIQoL_Mail.lua
---  A click shortcut and richer hover text for the inbox.
+--  Small mailbox improvements.
 --
 --   - Ctrl-click a mail to return it to its sender.
 --   - Hovering a mail lists every attachment once it carries more than one, and
 --     spells out a subject the row is too narrow to show.
+--   - Sending only money with a blank subject fills the subject in with the
+--     amount, which the client otherwise makes you type before it lets you send.
 --
 --  No shift-click shortcut: the retail client already takes a mail's money and
 --  attachments on shift-click. Adding our own take on top ran the operation
@@ -13,10 +15,11 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --  which leaves an emptied item mail undeleted.
 --
 --  Hooking: every hook here is additive (HookScript, and hooksecurefunc on the
---  function that builds the icon button's tooltip), never a replacement of a
---  Blizzard handler, so the default click and the default tooltip always still
---  run. Neither can be undone, so the enabled checks live inside the handlers
---  -- toggling the feature applies at once with nothing to re-hook.
+--  function that builds the icon button's tooltip and on the money field's
+--  change callback), never a replacement of a Blizzard handler, so the default
+--  click and the default tooltip always still run. Neither can be undone, so
+--  the enabled checks live inside the handlers -- toggling the feature applies
+--  at once with nothing to re-hook.
 -------------------------------------------------------------------------------
 
 local ROW_PATTERN = "^MailItem%d+$"
@@ -33,6 +36,7 @@ local SUB_DEFAULTS = {
     ctrlReturn     = true,
     itemTooltip    = true,
     subjectTooltip = true,
+    moneySubject   = true,
 }
 
 local function Opt(key)
@@ -202,6 +206,44 @@ local function OnRowEnter(frame)
 end
 
 -------------------------------------------------------------------------------
+--  Money subject
+-------------------------------------------------------------------------------
+
+-- The subject we wrote last. Only a blank subject or our own text is ever
+-- replaced, so anything the player typed, or the client set from an attached
+-- item, is left alone.
+local moneySubject
+
+-- "[1g 23s 45c]": the highest coin present and every coin below it. The coin
+-- symbols come from the client, so they are already in the player's language.
+local function MoneyText(copper)
+    local gold   = math.floor(copper / 10000)
+    local silver = math.floor(copper / 100) % 100
+    local rest   = copper % 100
+    if gold > 0 then
+        return string.format("[%d%s %d%s %d%s]", gold, GOLD_AMOUNT_SYMBOL,
+            silver, SILVER_AMOUNT_SYMBOL, rest, COPPER_AMOUNT_SYMBOL)
+    elseif silver > 0 then
+        return string.format("[%d%s %d%s]", silver, SILVER_AMOUNT_SYMBOL,
+            rest, COPPER_AMOUNT_SYMBOL)
+    end
+    return string.format("[%d%s]", rest, COPPER_AMOUNT_SYMBOL)
+end
+
+-- Runs after the client each time the amount in the Send Mail money field
+-- changes. Writing the subject re-runs the client's own send check, so the
+-- Send button enables itself.
+local function OnMoneyChanged()
+    if not Opt("moneySubject") then return end
+    local current = SendMailSubjectEditBox:GetText()
+    if current ~= "" and current ~= moneySubject then return end
+    local copper = MoneyInputFrame_GetCopper(SendMailMoney)
+    local text = copper > 0 and MoneyText(copper) or ""
+    if text ~= current then SendMailSubjectEditBox:SetText(text) end
+    moneySubject = text ~= "" and text or nil
+end
+
+-------------------------------------------------------------------------------
 --  Wiring
 -------------------------------------------------------------------------------
 
@@ -229,6 +271,9 @@ local function EnsureHooks()
     -- Hooking the function rather than the script puts our lines back after
     -- each rebuild.
     hooksecurefunc("InboxFrameItem_OnEnter", OnRowEnter)
+    -- The money field hands every change to a callback the client stored when
+    -- the frame loaded, so it is that field that gets hooked, not the function.
+    hooksecurefunc(SendMailMoney, "onValueChangedFunc", OnMoneyChanged)
     hooked = true
 end
 

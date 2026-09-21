@@ -14,6 +14,7 @@ local SUB_DEFAULTS = {
     ctrlReturn     = true,
     itemTooltip    = true,
     subjectTooltip = true,
+    moneySubject   = true,
 }
 
 local function Cfg()
@@ -43,7 +44,7 @@ _G._EUI_BuildMailSection = function(parent, yOffset, W, PP)
     row, h = W:DualRow(parent, y,
         { type    = "toggle",
           text    = "Enable Mailbox Improvements",
-          tooltip = "Adds a ctrl-click return shortcut and richer hover text to the inbox. The default click behaviour is untouched.",
+          tooltip = "Adds a ctrl-click return shortcut and richer hover text to the inbox, and fills a blank subject with the amount when you send only money. The default click behaviour is untouched.",
           getValue = function() return Cfg().enabled == true end,
           setValue = function(v)
               Cfg().enabled = v or nil
@@ -73,6 +74,9 @@ _G._EUI_BuildMailSection = function(parent, yOffset, W, PP)
                 { type = "toggle", label = "Show Full Subject on Hover",
                   get = function() return Get("subjectTooltip") end,
                   set = function(v) Set("subjectTooltip", v) end },
+                { type = "toggle", label = "Fill Blank Subject With the Money Amount",
+                  get = function() return Get("moneySubject") end,
+                  set = function(v) Set("moneySubject", v) end },
             },
         })
 
